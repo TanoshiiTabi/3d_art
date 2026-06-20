@@ -26,8 +26,12 @@ export default class SceneErrorBoundary extends React.Component<Props, State> {
           background: "#0a0a0f",
           display: "flex", flexDirection: "column",
           alignItems: "center", justifyContent: "center", gap: 16,
+          padding: 24,
         }}>
-          <p style={{ color: "#f87171", fontSize: 14 }}>3D scene failed to load.</p>
+          <p style={{ color: "#f87171", fontSize: 14, textAlign: "center" }}>3D scene failed to load.</p>
+          <p style={{ color: "#64748b", fontSize: 12, textAlign: "center", maxWidth: 400, wordBreak: "break-all" }}>
+            {this.state.message || "Unknown error"}
+          </p>
           <button
             onClick={() => { this.setState({ hasError: false, message: "" }); this.props.onReset(); }}
             style={{

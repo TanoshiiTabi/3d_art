@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useMemo } from "react";
-import { Canvas, useFrame, useThree } from "@react-three/fiber";
+import { Suspense, useEffect, useRef, useMemo } from "react";
+import { Canvas, useFrame, useThree, useLoader } from "@react-three/fiber";
 import * as THREE from "three";
 import gsap from "gsap";
 import ScrollTrigger from "gsap/ScrollTrigger";
@@ -35,31 +35,30 @@ const fragmentShader = /* glsl */ `
 
 // ─── Fragments (inside Canvas) ────────────────────────────────────────────────
 interface FragmentsProps {
-  texture: THREE.Texture;
+  imageUrl: string;
   scrollProgress: React.MutableRefObject<number>;
 }
 
-function Fragments({ texture, scrollProgress }: FragmentsProps) {
+function Fragments({ imageUrl, scrollProgress }: FragmentsProps) {
   const meshRef = useRef<THREE.InstancedMesh>(null!);
   const { camera } = useThree();
 
-  // Build per-instance UV offsets + target/scatter matrices once
+  // useLoader suspends until texture is ready — safe and idiomatic in R3F
+  const texture = useLoader(THREE.TextureLoader, imageUrl);
+  texture.colorSpace = THREE.SRGBColorSpace;
+
   const { uvOffsets, targets, scatters } = useMemo(() => {
     const uvOffsets = new Float32Array(COUNT * 2);
     const targets: THREE.Matrix4[] = [];
     const scatters: THREE.Matrix4[] = [];
-
     const span = (GRID - 1) * GAP;
 
     for (let row = 0; row < GRID; row++) {
       for (let col = 0; col < GRID; col++) {
         const i = row * GRID + col;
-
-        // UV: each tile samples a 1/8 × 1/8 slice (Y flipped to match image top)
         uvOffsets[i * 2 + 0] = col / GRID;
         uvOffsets[i * 2 + 1] = (GRID - 1 - row) / GRID;
 
-        // Target: flat grid centred at origin
         targets.push(
           new THREE.Matrix4().compose(
             new THREE.Vector3(col * GAP - span / 2, row * GAP - span / 2, 0),
@@ -68,7 +67,6 @@ function Fragments({ texture, scrollProgress }: FragmentsProps) {
           )
         );
 
-        // Scatter: random position deep in Z + random rotation
         scatters.push(
           new THREE.Matrix4().compose(
             new THREE.Vector3(
@@ -91,7 +89,6 @@ function Fragments({ texture, scrollProgress }: FragmentsProps) {
     return { uvOffsets, targets, scatters };
   }, []);
 
-  // Attach uvOffset as instanced attribute + initialise to scatter
   useEffect(() => {
     const mesh = meshRef.current;
     if (!mesh) return;
@@ -100,27 +97,28 @@ function Fragments({ texture, scrollProgress }: FragmentsProps) {
     mesh.instanceMatrix.needsUpdate = true;
   }, [uvOffsets, scatters]);
 
-  // Set camera once
   useEffect(() => {
     camera.position.set(0, 0, 8);
     camera.lookAt(0, 0, 0);
   }, [camera]);
 
-  // Scratch objects (avoid allocations each frame)
-  const posA = new THREE.Vector3();
-  const posB = new THREE.Vector3();
-  const quatA = new THREE.Quaternion();
-  const quatB = new THREE.Quaternion();
-  const scaleA = new THREE.Vector3();
-  const scaleB = new THREE.Vector3();
-  const tmp = new THREE.Matrix4();
+  // Scratch objects in refs to avoid GC pressure
+  const scratch = useRef({
+    posA: new THREE.Vector3(),
+    posB: new THREE.Vector3(),
+    quatA: new THREE.Quaternion(),
+    quatB: new THREE.Quaternion(),
+    scaleA: new THREE.Vector3(),
+    scaleB: new THREE.Vector3(),
+    tmp: new THREE.Matrix4(),
+  });
 
-  // Every frame: smoothstep-lerp each instance from scatter → target
   useFrame(() => {
     const mesh = meshRef.current;
     if (!mesh) return;
+    const { posA, posB, quatA, quatB, scaleA, scaleB, tmp } = scratch.current;
     const t = scrollProgress.current;
-    const p = t * t * (3 - 2 * t); // smoothstep
+    const p = t * t * (3 - 2 * t);
 
     for (let i = 0; i < COUNT; i++) {
       scatters[i].decompose(posA, quatA, scaleA);
@@ -155,16 +153,7 @@ interface SceneProps {
 
 export default function Scene({ imageUrl }: SceneProps) {
   const scrollProgress = useRef(0);
-  const containerRef = useRef<HTMLDivElement>(null);
 
-  // Load texture
-  const texture = useMemo(() => {
-    const tex = new THREE.TextureLoader().load(imageUrl);
-    tex.colorSpace = THREE.SRGBColorSpace;
-    return tex;
-  }, [imageUrl]);
-
-  // Bind GSAP ScrollTrigger to the page scroll — lives OUTSIDE Canvas
   useEffect(() => {
     const trigger = ScrollTrigger.create({
       trigger: document.documentElement,
@@ -178,14 +167,16 @@ export default function Scene({ imageUrl }: SceneProps) {
   }, []);
 
   return (
-    <div ref={containerRef} style={{ width: "100%", height: "100%" }}>
+    <div style={{ width: "100%", height: "100%" }}>
       <Canvas
-        gl={{ antialias: true, alpha: false }}
+        gl={{ antialias: true, alpha: false, powerPreference: "default" }}
         dpr={[1, 1.5]}
         camera={{ fov: 60, near: 0.1, far: 200 }}
         style={{ background: "#0a0a0f" }}
       >
-        <Fragments texture={texture} scrollProgress={scrollProgress} />
+        <Suspense fallback={null}>
+          <Fragments imageUrl={imageUrl} scrollProgress={scrollProgress} />
+        </Suspense>
       </Canvas>
     </div>
   );
