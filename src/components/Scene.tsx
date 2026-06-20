@@ -1,188 +1,135 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import * as THREE from "three";
-import gsap from "gsap";
-
-const GRID = 8;
-const COUNT = GRID * GRID;
-const TILE_SIZE = 0.88;
-const GAP = 1.0;
-const SCATTER_Z = -16;
-
-const vertexShader = /* glsl */ `
-  attribute vec2 uvOffset;
-  varying vec2 vUv;
-  void main() {
-    float tileSize = 1.0 / 8.0;
-    vUv = uvOffset + uv * tileSize;
-    gl_Position = projectionMatrix * modelViewMatrix * instanceMatrix * vec4(position, 1.0);
-  }
-`;
-const fragmentShader = /* glsl */ `
-  uniform sampler2D uTexture;
-  varying vec2 vUv;
-  void main() {
-    gl_FragColor = texture2D(uTexture, vUv);
-  }
-`;
+import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 
 interface SceneProps {
   imageCanvas: HTMLCanvasElement;
+  depthMap: Float32Array;
+  depthWidth: number;
+  depthHeight: number;
 }
 
-export default function Scene({ imageCanvas }: SceneProps) {
-  const canvasRef = useRef<HTMLDivElement>(null);
-  const progressRef = useRef(0);
-  const tweenRef = useRef<gsap.core.Tween | null>(null);
-  const [sliderVal, setSliderVal] = useState(0);
-  const [isPlaying, setIsPlaying] = useState(false);
+const SEGMENTS = 256; // mesh resolution
+const DEPTH_SCALE = 1.8; // how pronounced the 3D effect is
 
-  // Play animation helper — defined with useRef so it's stable
-  const playFn = useRef<() => void>(() => {});
+export default function Scene({ imageCanvas, depthMap, depthWidth, depthHeight }: SceneProps) {
+  const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const container = canvasRef.current;
+    const container = containerRef.current;
     if (!container) return;
 
     // ── Renderer ──────────────────────────────────────────────────────────────
     const renderer = new THREE.WebGLRenderer({ antialias: true });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setSize(container.clientWidth, container.clientHeight);
-    renderer.setClearColor(0x0d0d1a);
+    renderer.shadowMap.enabled = true;
     container.appendChild(renderer.domElement);
 
     // ── Scene / Camera ────────────────────────────────────────────────────────
     const scene = new THREE.Scene();
-    const camera = new THREE.PerspectiveCamera(
-      60,
-      container.clientWidth / container.clientHeight,
-      0.1,
-      200
-    );
-    camera.position.set(0, 0, 10);
-    camera.lookAt(0, 0, 0);
+    scene.background = new THREE.Color(0x0d0d1a);
 
-    // ── Texture ───────────────────────────────────────────────────────────────
+    const camera = new THREE.PerspectiveCamera(
+      50,
+      container.clientWidth / container.clientHeight,
+      0.01,
+      100
+    );
+    camera.position.set(0, 0, 3);
+
+    // ── OrbitControls ─────────────────────────────────────────────────────────
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.06;
+    controls.minDistance = 0.5;
+    controls.maxDistance = 8;
+    controls.autoRotate = true;
+    controls.autoRotateSpeed = 1.2;
+
+    // ── Texture from uploaded image ───────────────────────────────────────────
     const texture = new THREE.CanvasTexture(imageCanvas);
     texture.colorSpace = THREE.SRGBColorSpace;
 
-    // ── Per-instance data ─────────────────────────────────────────────────────
-    const uvOffsets = new Float32Array(COUNT * 2);
-    const targets: THREE.Matrix4[] = [];
-    const scatters: THREE.Matrix4[] = [];
-    const span = (GRID - 1) * GAP;
+    // ── Displaced plane geometry ──────────────────────────────────────────────
+    const imgW = imageCanvas.width;
+    const imgH = imageCanvas.height;
+    const aspect = imgW / imgH;
 
-    for (let row = 0; row < GRID; row++) {
-      for (let col = 0; col < GRID; col++) {
-        const i = row * GRID + col;
-        uvOffsets[i * 2] = col / GRID;
-        uvOffsets[i * 2 + 1] = (GRID - 1 - row) / GRID;
+    const geometry = new THREE.PlaneGeometry(2 * aspect, 2, SEGMENTS, SEGMENTS);
+    const positions = geometry.attributes.position;
 
-        targets.push(
-          new THREE.Matrix4().compose(
-            new THREE.Vector3(col * GAP - span / 2, row * GAP - span / 2, 0),
-            new THREE.Quaternion(),
-            new THREE.Vector3(1, 1, 1)
-          )
-        );
+    // Sample depth map for each vertex
+    for (let i = 0; i <= SEGMENTS; i++) {
+      for (let j = 0; j <= SEGMENTS; j++) {
+        const idx = i * (SEGMENTS + 1) + j;
 
-        scatters.push(
-          new THREE.Matrix4().compose(
-            new THREE.Vector3(
-              (Math.random() - 0.5) * span * 2.5,
-              (Math.random() - 0.5) * span * 2.5,
-              SCATTER_Z + Math.random() * 8
-            ),
-            new THREE.Quaternion().setFromEuler(
-              new THREE.Euler(
-                (Math.random() - 0.5) * Math.PI * 2,
-                (Math.random() - 0.5) * Math.PI * 2,
-                (Math.random() - 0.5) * Math.PI
-              )
-            ),
-            new THREE.Vector3(1, 1, 1)
-          )
-        );
+        // UV in [0,1]
+        const u = j / SEGMENTS;
+        const v = i / SEGMENTS;
+
+        // Sample depth map (bilinear)
+        const dx = u * (depthWidth - 1);
+        const dy = (1 - v) * (depthHeight - 1);
+        const xi = Math.floor(dx), yi = Math.floor(dy);
+        const xf = dx - xi, yf = dy - yi;
+
+        const s = (x: number, y: number) =>
+          depthMap[Math.min(y, depthHeight - 1) * depthWidth + Math.min(x, depthWidth - 1)];
+
+        const depth =
+          s(xi, yi) * (1 - xf) * (1 - yf) +
+          s(xi + 1, yi) * xf * (1 - yf) +
+          s(xi, yi + 1) * (1 - xf) * yf +
+          s(xi + 1, yi + 1) * xf * yf;
+
+        positions.setZ(idx, depth * DEPTH_SCALE);
       }
     }
+    positions.needsUpdate = true;
+    geometry.computeVertexNormals();
 
-    // ── Mesh ──────────────────────────────────────────────────────────────────
-    const geometry = new THREE.PlaneGeometry(TILE_SIZE, TILE_SIZE);
-    geometry.setAttribute("uvOffset", new THREE.InstancedBufferAttribute(uvOffsets, 2));
-
-    const material = new THREE.ShaderMaterial({
-      uniforms: { uTexture: { value: texture } },
-      vertexShader,
-      fragmentShader,
-      side: THREE.DoubleSide,
+    const material = new THREE.MeshStandardMaterial({
+      map: texture,
+      roughness: 0.6,
+      metalness: 0.1,
     });
 
-    const mesh = new THREE.InstancedMesh(geometry, material, COUNT);
-    mesh.frustumCulled = false;
+    const mesh = new THREE.Mesh(geometry, material);
     scene.add(mesh);
 
-    // Init scatter positions
-    for (let i = 0; i < COUNT; i++) mesh.setMatrixAt(i, scatters[i]);
-    mesh.instanceMatrix.needsUpdate = true;
-
-    // ── Scratch objects ───────────────────────────────────────────────────────
-    const posA = new THREE.Vector3(), posB = new THREE.Vector3();
-    const quatA = new THREE.Quaternion(), quatB = new THREE.Quaternion();
-    const scaleA = new THREE.Vector3();
-    const tmp = new THREE.Matrix4();
+    // ── Lighting ──────────────────────────────────────────────────────────────
+    scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+    const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
+    dirLight.position.set(2, 3, 4);
+    scene.add(dirLight);
+    const fillLight = new THREE.DirectionalLight(0x8888ff, 0.4);
+    fillLight.position.set(-2, -1, 2);
+    scene.add(fillLight);
 
     // ── Render loop ───────────────────────────────────────────────────────────
     let rafId = 0;
     const render = () => {
       rafId = requestAnimationFrame(render);
-      const t = progressRef.current;
-      const p = t * t * (3 - 2 * t);
-
-      for (let i = 0; i < COUNT; i++) {
-        scatters[i].decompose(posA, quatA, scaleA);
-        targets[i].decompose(posB, quatB, scaleA);
-        posA.lerp(posB, p);
-        quatA.slerp(quatB, p);
-        tmp.compose(posA, quatA, scaleA);
-        mesh.setMatrixAt(i, tmp);
-      }
-      mesh.instanceMatrix.needsUpdate = true;
+      controls.update();
       renderer.render(scene, camera);
     };
     render();
 
     // ── Resize ────────────────────────────────────────────────────────────────
     const onResize = () => {
-      if (!container) return;
       renderer.setSize(container.clientWidth, container.clientHeight);
       camera.aspect = container.clientWidth / container.clientHeight;
       camera.updateProjectionMatrix();
     };
     window.addEventListener("resize", onResize);
 
-    // ── Play helper ───────────────────────────────────────────────────────────
-    playFn.current = () => {
-      tweenRef.current?.kill();
-      progressRef.current = 0;
-      setSliderVal(0);
-      setIsPlaying(true);
-      tweenRef.current = gsap.to(progressRef, {
-        current: 1,
-        duration: 2.4,
-        ease: "power2.inOut",
-        onUpdate: () => setSliderVal(Math.round(progressRef.current * 100)),
-        onComplete: () => setIsPlaying(false),
-      });
-    };
-
-    // Auto-play on mount
-    setTimeout(() => playFn.current(), 300);
-
     return () => {
       cancelAnimationFrame(rafId);
       window.removeEventListener("resize", onResize);
-      tweenRef.current?.kill();
+      controls.dispose();
       renderer.dispose();
       geometry.dispose();
       material.dispose();
@@ -191,69 +138,26 @@ export default function Scene({ imageCanvas }: SceneProps) {
         container.removeChild(renderer.domElement);
       }
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [imageCanvas]);
-
-  const handleSlider = (e: React.ChangeEvent<HTMLInputElement>) => {
-    tweenRef.current?.kill();
-    setIsPlaying(false);
-    progressRef.current = Number(e.target.value) / 100;
-    setSliderVal(Number(e.target.value));
-  };
+  }, [imageCanvas, depthMap, depthWidth, depthHeight]);
 
   return (
     <div style={{ width: "100%", height: "100%", position: "relative" }}>
-      {/* Three.js canvas mount point */}
-      <div ref={canvasRef} style={{ width: "100%", height: "100%" }} />
+      <div ref={containerRef} style={{ width: "100%", height: "100%" }} />
 
-      {/* Controls overlay */}
+      {/* Controls hint */}
       <div style={{
-        position: "absolute", bottom: 28, left: "50%", transform: "translateX(-50%)",
-        display: "flex", flexDirection: "column", alignItems: "center", gap: 12,
-        background: "rgba(10,10,20,0.75)", backdropFilter: "blur(12px)",
-        WebkitBackdropFilter: "blur(12px)",
-        border: "1px solid rgba(255,255,255,0.08)",
-        borderRadius: 16, padding: "14px 20px", minWidth: 280,
+        position: "absolute", bottom: 16, left: "50%", transform: "translateX(-50%)",
+        display: "flex", gap: 12,
+        background: "rgba(10,10,20,0.7)", backdropFilter: "blur(10px)",
+        border: "1px solid rgba(255,255,255,0.07)",
+        borderRadius: 10, padding: "8px 16px",
+        fontSize: 11, color: "#475569",
       }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, width: "100%" }}>
-          <span style={{ fontSize: 10, color: "#475569", width: 28 }}>0%</span>
-          <input
-            type="range" min={0} max={100} value={sliderVal}
-            onChange={handleSlider}
-            style={{ flex: 1, accentColor: "#7c3aed", cursor: "pointer" }}
-          />
-          <span style={{ fontSize: 10, color: "#475569", width: 32, textAlign: "right" }}>{sliderVal}%</span>
-        </div>
-
-        <div style={{ display: "flex", gap: 8 }}>
-          <button
-            onClick={() => playFn.current()}
-            style={{
-              padding: "7px 18px", borderRadius: 8, cursor: "pointer",
-              background: isPlaying ? "rgba(109,40,217,0.15)" : "rgba(109,40,217,0.8)",
-              border: "1px solid rgba(109,40,217,0.5)",
-              color: "#fff", fontSize: 12, fontWeight: 600,
-            }}
-          >
-            {isPlaying ? "▶ Playing…" : "▶ Replay"}
-          </button>
-          <button
-            onClick={() => {
-              tweenRef.current?.kill();
-              setIsPlaying(false);
-              progressRef.current = 0;
-              setSliderVal(0);
-            }}
-            style={{
-              padding: "7px 14px", borderRadius: 8, cursor: "pointer",
-              background: "rgba(255,255,255,0.05)",
-              border: "1px solid rgba(255,255,255,0.1)",
-              color: "#94a3b8", fontSize: 12,
-            }}
-          >
-            ↺ Reset
-          </button>
-        </div>
+        <span>🖱 Drag to rotate</span>
+        <span>·</span>
+        <span>Scroll to zoom</span>
+        <span>·</span>
+        <span>Auto-rotating</span>
       </div>
     </div>
   );
