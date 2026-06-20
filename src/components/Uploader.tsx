@@ -15,9 +15,23 @@ export default function Uploader({ onImageLoad }: UploaderProps) {
       if (!file.type.startsWith("image/")) return;
       const reader = new FileReader();
       reader.onload = (e) => {
-        const url = e.target?.result as string;
-        setPreview(url);
-        onImageLoad(url);
+        const raw = e.target?.result as string;
+        const img = new Image();
+        img.onload = () => {
+          const MAX = 1024;
+          const scale = Math.min(1, MAX / Math.max(img.width, img.height));
+          const w = Math.round(img.width * scale);
+          const h = Math.round(img.height * scale);
+          const canvas = document.createElement("canvas");
+          canvas.width = w;
+          canvas.height = h;
+          const ctx = canvas.getContext("2d")!;
+          ctx.drawImage(img, 0, 0, w, h);
+          const resized = canvas.toDataURL("image/jpeg", 0.92);
+          setPreview(resized);
+          onImageLoad(resized);
+        };
+        img.src = raw;
       };
       reader.readAsDataURL(file);
     },
