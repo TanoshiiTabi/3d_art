@@ -1,7 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useMemo, useState } from "react";
-import { Canvas, useFrame, useThree } from "@react-three/fiber";
+import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import gsap from "gsap";
 
@@ -28,17 +27,47 @@ const fragmentShader = /* glsl */ `
   }
 `;
 
-// ─── Fragments ────────────────────────────────────────────────────────────────
-interface FragmentsProps {
-  texture: THREE.CanvasTexture;
-  progress: React.MutableRefObject<number>;
+interface SceneProps {
+  imageCanvas: HTMLCanvasElement;
 }
 
-function Fragments({ texture, progress }: FragmentsProps) {
-  const meshRef = useRef<THREE.InstancedMesh>(null!);
-  const { camera } = useThree();
+export default function Scene({ imageCanvas }: SceneProps) {
+  const canvasRef = useRef<HTMLDivElement>(null);
+  const progressRef = useRef(0);
+  const tweenRef = useRef<gsap.core.Tween | null>(null);
+  const [sliderVal, setSliderVal] = useState(0);
+  const [isPlaying, setIsPlaying] = useState(false);
 
-  const { uvOffsets, targets, scatters } = useMemo(() => {
+  // Play animation helper — defined with useRef so it's stable
+  const playFn = useRef<() => void>(() => {});
+
+  useEffect(() => {
+    const container = canvasRef.current;
+    if (!container) return;
+
+    // ── Renderer ──────────────────────────────────────────────────────────────
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+    renderer.setSize(container.clientWidth, container.clientHeight);
+    renderer.setClearColor(0x0d0d1a);
+    container.appendChild(renderer.domElement);
+
+    // ── Scene / Camera ────────────────────────────────────────────────────────
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(
+      60,
+      container.clientWidth / container.clientHeight,
+      0.1,
+      200
+    );
+    camera.position.set(0, 0, 10);
+    camera.lookAt(0, 0, 0);
+
+    // ── Texture ───────────────────────────────────────────────────────────────
+    const texture = new THREE.CanvasTexture(imageCanvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+
+    // ── Per-instance data ─────────────────────────────────────────────────────
     const uvOffsets = new Float32Array(COUNT * 2);
     const targets: THREE.Matrix4[] = [];
     const scatters: THREE.Matrix4[] = [];
@@ -77,120 +106,105 @@ function Fragments({ texture, progress }: FragmentsProps) {
         );
       }
     }
-    return { uvOffsets, targets, scatters };
-  }, []);
 
-  useEffect(() => {
-    camera.position.set(0, 0, 10);
-    camera.lookAt(0, 0, 0);
-  }, [camera]);
+    // ── Mesh ──────────────────────────────────────────────────────────────────
+    const geometry = new THREE.PlaneGeometry(TILE_SIZE, TILE_SIZE);
+    geometry.setAttribute("uvOffset", new THREE.InstancedBufferAttribute(uvOffsets, 2));
 
-  useEffect(() => {
-    const mesh = meshRef.current;
-    if (!mesh) return;
-    mesh.geometry.setAttribute(
-      "uvOffset",
-      new THREE.InstancedBufferAttribute(uvOffsets, 2)
-    );
+    const material = new THREE.ShaderMaterial({
+      uniforms: { uTexture: { value: texture } },
+      vertexShader,
+      fragmentShader,
+      side: THREE.DoubleSide,
+    });
+
+    const mesh = new THREE.InstancedMesh(geometry, material, COUNT);
+    mesh.frustumCulled = false;
+    scene.add(mesh);
+
+    // Init scatter positions
     for (let i = 0; i < COUNT; i++) mesh.setMatrixAt(i, scatters[i]);
     mesh.instanceMatrix.needsUpdate = true;
-  }, [uvOffsets, scatters]);
 
-  const scratch = useRef({
-    posA: new THREE.Vector3(), posB: new THREE.Vector3(),
-    quatA: new THREE.Quaternion(), quatB: new THREE.Quaternion(),
-    scaleA: new THREE.Vector3(), tmp: new THREE.Matrix4(),
-  });
+    // ── Scratch objects ───────────────────────────────────────────────────────
+    const posA = new THREE.Vector3(), posB = new THREE.Vector3();
+    const quatA = new THREE.Quaternion(), quatB = new THREE.Quaternion();
+    const scaleA = new THREE.Vector3();
+    const tmp = new THREE.Matrix4();
 
-  useFrame(() => {
-    const mesh = meshRef.current;
-    if (!mesh) return;
-    const { posA, posB, quatA, quatB, scaleA, tmp } = scratch.current;
-    const t = progress.current;
-    const p = t * t * (3 - 2 * t);
+    // ── Render loop ───────────────────────────────────────────────────────────
+    let rafId = 0;
+    const render = () => {
+      rafId = requestAnimationFrame(render);
+      const t = progressRef.current;
+      const p = t * t * (3 - 2 * t);
 
-    for (let i = 0; i < COUNT; i++) {
-      scatters[i].decompose(posA, quatA, scaleA);
-      targets[i].decompose(posB, quatB, scaleA);
-      posA.lerp(posB, p);
-      quatA.slerp(quatB, p);
-      tmp.compose(posA, quatA, scaleA);
-      mesh.setMatrixAt(i, tmp);
-    }
-    mesh.instanceMatrix.needsUpdate = true;
-  });
+      for (let i = 0; i < COUNT; i++) {
+        scatters[i].decompose(posA, quatA, scaleA);
+        targets[i].decompose(posB, quatB, scaleA);
+        posA.lerp(posB, p);
+        quatA.slerp(quatB, p);
+        tmp.compose(posA, quatA, scaleA);
+        mesh.setMatrixAt(i, tmp);
+      }
+      mesh.instanceMatrix.needsUpdate = true;
+      renderer.render(scene, camera);
+    };
+    render();
 
-  const geometry = useMemo(() => new THREE.PlaneGeometry(TILE_SIZE, TILE_SIZE), []);
-  const material = useMemo(
-    () => new THREE.ShaderMaterial({
-      uniforms: { uTexture: { value: texture } },
-      vertexShader, fragmentShader,
-      side: THREE.DoubleSide,
-    }),
-    [texture]
-  );
+    // ── Resize ────────────────────────────────────────────────────────────────
+    const onResize = () => {
+      if (!container) return;
+      renderer.setSize(container.clientWidth, container.clientHeight);
+      camera.aspect = container.clientWidth / container.clientHeight;
+      camera.updateProjectionMatrix();
+    };
+    window.addEventListener("resize", onResize);
 
-  return (
-    <instancedMesh ref={meshRef} args={[geometry, material, COUNT]} frustumCulled={false} />
-  );
-}
+    // ── Play helper ───────────────────────────────────────────────────────────
+    playFn.current = () => {
+      tweenRef.current?.kill();
+      progressRef.current = 0;
+      setSliderVal(0);
+      setIsPlaying(true);
+      tweenRef.current = gsap.to(progressRef, {
+        current: 1,
+        duration: 2.4,
+        ease: "power2.inOut",
+        onUpdate: () => setSliderVal(Math.round(progressRef.current * 100)),
+        onComplete: () => setIsPlaying(false),
+      });
+    };
 
-// ─── Scene root ───────────────────────────────────────────────────────────────
-interface SceneProps {
-  imageCanvas: HTMLCanvasElement;
-}
+    // Auto-play on mount
+    setTimeout(() => playFn.current(), 300);
 
-export default function Scene({ imageCanvas }: SceneProps) {
-  const progress = useRef(0);
-  const tweenRef = useRef<gsap.core.Tween | null>(null);
-  const [sliderVal, setSliderVal] = useState(0);
-  const [isPlaying, setIsPlaying] = useState(false);
-
-  const texture = useMemo(() => {
-    const tex = new THREE.CanvasTexture(imageCanvas);
-    tex.colorSpace = THREE.SRGBColorSpace;
-    return tex;
-  }, [imageCanvas]);
-
-  const playAnimation = () => {
-    tweenRef.current?.kill();
-    progress.current = 0;
-    setSliderVal(0);
-    setIsPlaying(true);
-    tweenRef.current = gsap.to(progress, {
-      current: 1,
-      duration: 2.4,
-      ease: "power2.inOut",
-      onUpdate: () => setSliderVal(Math.round(progress.current * 100)),
-      onComplete: () => setIsPlaying(false),
-    });
-  };
-
-  // Auto-play when image loads
-  useEffect(() => {
-    const id = setTimeout(playAnimation, 300);
-    return () => clearTimeout(id);
+    return () => {
+      cancelAnimationFrame(rafId);
+      window.removeEventListener("resize", onResize);
+      tweenRef.current?.kill();
+      renderer.dispose();
+      geometry.dispose();
+      material.dispose();
+      texture.dispose();
+      if (container.contains(renderer.domElement)) {
+        container.removeChild(renderer.domElement);
+      }
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [imageCanvas]);
 
   const handleSlider = (e: React.ChangeEvent<HTMLInputElement>) => {
     tweenRef.current?.kill();
     setIsPlaying(false);
-    const v = Number(e.target.value) / 100;
-    progress.current = v;
+    progressRef.current = Number(e.target.value) / 100;
     setSliderVal(Number(e.target.value));
   };
 
   return (
     <div style={{ width: "100%", height: "100%", position: "relative" }}>
-      <Canvas
-        gl={{ antialias: true, alpha: false, powerPreference: "default" }}
-        dpr={[1, 1.5]}
-        camera={{ fov: 60, near: 0.1, far: 200 }}
-        style={{ background: "#0d0d1a" }}
-      >
-        <Fragments texture={texture} progress={progress} />
-      </Canvas>
+      {/* Three.js canvas mount point */}
+      <div ref={canvasRef} style={{ width: "100%", height: "100%" }} />
 
       {/* Controls overlay */}
       <div style={{
@@ -199,9 +213,8 @@ export default function Scene({ imageCanvas }: SceneProps) {
         background: "rgba(10,10,20,0.75)", backdropFilter: "blur(12px)",
         WebkitBackdropFilter: "blur(12px)",
         border: "1px solid rgba(255,255,255,0.08)",
-        borderRadius: 16, padding: "14px 20px", minWidth: 260,
+        borderRadius: 16, padding: "14px 20px", minWidth: 280,
       }}>
-        {/* Slider */}
         <div style={{ display: "flex", alignItems: "center", gap: 10, width: "100%" }}>
           <span style={{ fontSize: 10, color: "#475569", width: 28 }}>0%</span>
           <input
@@ -209,19 +222,17 @@ export default function Scene({ imageCanvas }: SceneProps) {
             onChange={handleSlider}
             style={{ flex: 1, accentColor: "#7c3aed", cursor: "pointer" }}
           />
-          <span style={{ fontSize: 10, color: "#475569", width: 28, textAlign: "right" }}>100%</span>
+          <span style={{ fontSize: 10, color: "#475569", width: 32, textAlign: "right" }}>{sliderVal}%</span>
         </div>
 
-        {/* Buttons */}
         <div style={{ display: "flex", gap: 8 }}>
           <button
-            onClick={playAnimation}
+            onClick={() => playFn.current()}
             style={{
               padding: "7px 18px", borderRadius: 8, cursor: "pointer",
               background: isPlaying ? "rgba(109,40,217,0.15)" : "rgba(109,40,217,0.8)",
               border: "1px solid rgba(109,40,217,0.5)",
               color: "#fff", fontSize: 12, fontWeight: 600,
-              transition: "background 0.2s",
             }}
           >
             {isPlaying ? "▶ Playing…" : "▶ Replay"}
@@ -230,7 +241,7 @@ export default function Scene({ imageCanvas }: SceneProps) {
             onClick={() => {
               tweenRef.current?.kill();
               setIsPlaying(false);
-              progress.current = 0;
+              progressRef.current = 0;
               setSliderVal(0);
             }}
             style={{
