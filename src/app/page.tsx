@@ -4,6 +4,7 @@ import { useState, useCallback } from "react";
 import dynamic from "next/dynamic";
 import Uploader from "@/components/Uploader";
 import CodeExporter from "@/components/CodeExporter";
+import SceneErrorBoundary from "@/components/SceneErrorBoundary";
 
 const Scene = dynamic(() => import("@/components/Scene"), {
   ssr: false,
@@ -28,11 +29,13 @@ export default function Home() {
       {imageUrl ? (
         <>
           {/* Fixed 3D canvas behind everything */}
-          <div style={{
-            position: "fixed", inset: 0, zIndex: 0,
-          }}>
-            <Scene imageUrl={imageUrl} />
-          </div>
+          <SceneErrorBoundary onReset={() => setImageUrl(null)}>
+            <div style={{
+              position: "fixed", inset: 0, zIndex: 0,
+            }}>
+              <Scene imageUrl={imageUrl} />
+            </div>
+          </SceneErrorBoundary>
 
           {/* Tall scroll container */}
           <div style={{ position: "relative", zIndex: 10, minHeight: "300vh" }}>

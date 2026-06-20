@@ -1,39 +1,52 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 
 interface UploaderProps {
-  onImageLoad: (dataUrl: string) => void;
+  onImageLoad: (objectUrl: string) => void;
 }
 
 export default function Uploader({ onImageLoad }: UploaderProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [preview, setPreview] = useState<string | null>(null);
+  const prevObjectUrl = useRef<string | null>(null);
 
   const processFile = useCallback(
     (file: File) => {
       if (!file.type.startsWith("image/")) return;
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        const raw = e.target?.result as string;
-        const img = new Image();
-        img.onload = () => {
-          const MAX = 1024;
-          const scale = Math.min(1, MAX / Math.max(img.width, img.height));
-          const w = Math.round(img.width * scale);
-          const h = Math.round(img.height * scale);
-          const canvas = document.createElement("canvas");
-          canvas.width = w;
-          canvas.height = h;
-          const ctx = canvas.getContext("2d")!;
-          ctx.drawImage(img, 0, 0, w, h);
-          const resized = canvas.toDataURL("image/jpeg", 0.92);
-          setPreview(resized);
-          onImageLoad(resized);
-        };
-        img.src = raw;
+
+      const img = new Image();
+      const raw = URL.createObjectURL(file);
+
+      img.onload = () => {
+        URL.revokeObjectURL(raw);
+
+        const MAX = 512;
+        const scale = Math.min(1, MAX / Math.max(img.width, img.height));
+        const w = Math.round(img.width * scale);
+        const h = Math.round(img.height * scale);
+
+        const canvas = document.createElement("canvas");
+        canvas.width = w;
+        canvas.height = h;
+        canvas.getContext("2d")!.drawImage(img, 0, 0, w, h);
+
+        canvas.toBlob(
+          (blob) => {
+            if (!blob) return;
+            // revoke previous object URL to free memory
+            if (prevObjectUrl.current) URL.revokeObjectURL(prevObjectUrl.current);
+            const url = URL.createObjectURL(blob);
+            prevObjectUrl.current = url;
+            setPreview(url);
+            onImageLoad(url);
+          },
+          "image/jpeg",
+          0.9
+        );
       };
-      reader.readAsDataURL(file);
+
+      img.src = raw;
     },
     [onImageLoad]
   );

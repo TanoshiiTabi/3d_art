@@ -181,7 +181,7 @@ export default function Scene({ imageUrl }: SceneProps) {
     <div ref={containerRef} style={{ width: "100%", height: "100%" }}>
       <Canvas
         gl={{ antialias: true, alpha: false }}
-        dpr={[1, 2]}
+        dpr={[1, 1.5]}
         camera={{ fov: 60, near: 0.1, far: 200 }}
         style={{ background: "#0a0a0f" }}
       >
