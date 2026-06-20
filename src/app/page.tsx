@@ -16,24 +16,21 @@ const Scene = dynamic(() => import("@/components/Scene"), {
 });
 
 export default function Home() {
-  const [imageUrl, setImageUrl] = useState<string | null>(null);
+  const [imageCanvas, setImageCanvas] = useState<HTMLCanvasElement | null>(null);
 
-  const handleImageLoad = useCallback((url: string) => {
-    setImageUrl(url);
+  const handleImageReady = useCallback((canvas: HTMLCanvasElement) => {
+    setImageCanvas(canvas);
   }, []);
 
   return (
     <div style={{ minHeight: "100vh", background: "#0a0a0f", color: "#e2e8f0", fontFamily: "system-ui, sans-serif" }}>
 
-      {/* ── When image is uploaded: sticky canvas + scroll space ── */}
-      {imageUrl ? (
+      {imageCanvas ? (
         <>
           {/* Fixed 3D canvas behind everything */}
-          <SceneErrorBoundary onReset={() => setImageUrl(null)}>
-            <div style={{
-              position: "fixed", inset: 0, zIndex: 0,
-            }}>
-              <Scene imageUrl={imageUrl} />
+          <SceneErrorBoundary onReset={() => setImageCanvas(null)}>
+            <div style={{ position: "fixed", inset: 0, zIndex: 0 }}>
+              <Scene imageCanvas={imageCanvas} />
             </div>
           </SceneErrorBoundary>
 
@@ -47,7 +44,6 @@ export default function Home() {
               paddingTop: 32, paddingBottom: 24, paddingLeft: 16, paddingRight: 16,
               pointerEvents: "none",
             }}>
-              {/* Glass card */}
               <div style={{
                 pointerEvents: "auto",
                 width: "100%", maxWidth: 520,
@@ -61,17 +57,15 @@ export default function Home() {
                 boxShadow: "0 25px 60px rgba(0,0,0,0.6)",
               }}>
                 <Title />
-                <Uploader onImageLoad={handleImageLoad} />
+                <Uploader onImageReady={handleImageReady} />
                 <ScrollHint />
               </div>
 
-              {/* Code exporter below card */}
               <div style={{ pointerEvents: "auto", marginTop: 16, width: "100%", maxWidth: 520 }}>
-                <CodeExporter imageUrl={imageUrl} />
+                <CodeExporter imageUrl="" />
               </div>
             </div>
 
-            {/* Scroll milestone badges */}
             <div style={{
               position: "absolute", top: "110vh", left: "50%", transform: "translateX(-50%)",
               pointerEvents: "none",
@@ -87,29 +81,24 @@ export default function Home() {
           </div>
         </>
       ) : (
-        /* ── Empty state: full-screen hero ── */
         <div style={{
           minHeight: "100vh",
           display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
           padding: 24, gap: 40,
         }}>
-          {/* Animated background orbs */}
           <div style={{ position: "fixed", inset: 0, overflow: "hidden", zIndex: 0, pointerEvents: "none" }}>
             <div style={{
-              position: "absolute", width: 600, height: 600,
-              borderRadius: "50%",
+              position: "absolute", width: 600, height: 600, borderRadius: "50%",
               background: "radial-gradient(circle, rgba(109,40,217,0.18) 0%, transparent 70%)",
               top: "10%", left: "50%", transform: "translateX(-50%)",
             }} />
             <div style={{
-              position: "absolute", width: 400, height: 400,
-              borderRadius: "50%",
+              position: "absolute", width: 400, height: 400, borderRadius: "50%",
               background: "radial-gradient(circle, rgba(6,182,212,0.1) 0%, transparent 70%)",
               bottom: "10%", right: "15%",
             }} />
           </div>
 
-          {/* Hero card */}
           <div style={{
             position: "relative", zIndex: 1,
             width: "100%", maxWidth: 560,
@@ -124,7 +113,6 @@ export default function Home() {
           }}>
             <Title />
 
-            {/* Feature chips */}
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center" }}>
               {["React Three Fiber", "GSAP ScrollTrigger", "instancedMesh", "Custom Shader"].map((t) => (
                 <span key={t} style={{
@@ -137,9 +125,8 @@ export default function Home() {
               ))}
             </div>
 
-            <Uploader onImageLoad={handleImageLoad} />
+            <Uploader onImageReady={handleImageReady} />
 
-            {/* Instruction steps */}
             <div style={{ width: "100%", display: "flex", flexDirection: "column", gap: 10 }}>
               {[
                 ["01", "Upload any photo"],
@@ -151,8 +138,7 @@ export default function Home() {
                     width: 28, height: 28, borderRadius: 8,
                     background: "rgba(109,40,217,0.2)", border: "1px solid rgba(109,40,217,0.4)",
                     color: "#a78bfa", fontSize: 11, fontWeight: 700,
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    flexShrink: 0,
+                    display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
                   }}>{num}</span>
                   <span style={{ color: "#94a3b8", fontSize: 13 }}>{text}</span>
                 </div>
@@ -164,8 +150,6 @@ export default function Home() {
     </div>
   );
 }
-
-// ─── Sub-components ────────────────────────────────────────────────────────────
 
 function Title() {
   return (

@@ -3,13 +3,13 @@
 import { useCallback, useRef, useState } from "react";
 
 interface UploaderProps {
-  onImageLoad: (objectUrl: string) => void;
+  onImageReady: (canvas: HTMLCanvasElement) => void;
 }
 
-export default function Uploader({ onImageLoad }: UploaderProps) {
+export default function Uploader({ onImageReady }: UploaderProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [preview, setPreview] = useState<string | null>(null);
-  const prevObjectUrl = useRef<string | null>(null);
+  const prevPreviewUrl = useRef<string | null>(null);
 
   const processFile = useCallback(
     (file: File) => {
@@ -26,29 +26,31 @@ export default function Uploader({ onImageLoad }: UploaderProps) {
         const w = Math.round(img.width * scale);
         const h = Math.round(img.height * scale);
 
-        const canvas = document.createElement("canvas");
-        canvas.width = w;
-        canvas.height = h;
-        canvas.getContext("2d")!.drawImage(img, 0, 0, w, h);
+        const offscreen = document.createElement("canvas");
+        offscreen.width = w;
+        offscreen.height = h;
+        offscreen.getContext("2d")!.drawImage(img, 0, 0, w, h);
 
-        canvas.toBlob(
-          (blob) => {
-            if (!blob) return;
-            // revoke previous object URL to free memory
-            if (prevObjectUrl.current) URL.revokeObjectURL(prevObjectUrl.current);
-            const url = URL.createObjectURL(blob);
-            prevObjectUrl.current = url;
-            setPreview(url);
-            onImageLoad(url);
-          },
-          "image/jpeg",
-          0.9
-        );
+        // Preview thumbnail (small separate canvas → blob URL)
+        const thumb = document.createElement("canvas");
+        thumb.width = Math.min(w, 200);
+        thumb.height = Math.round(h * (thumb.width / w));
+        thumb.getContext("2d")!.drawImage(offscreen, 0, 0, thumb.width, thumb.height);
+        thumb.toBlob((blob) => {
+          if (!blob) return;
+          if (prevPreviewUrl.current) URL.revokeObjectURL(prevPreviewUrl.current);
+          const url = URL.createObjectURL(blob);
+          prevPreviewUrl.current = url;
+          setPreview(url);
+        }, "image/jpeg", 0.8);
+
+        // Pass the full-res canvas to Scene
+        onImageReady(offscreen);
       };
 
       img.src = raw;
     },
-    [onImageLoad]
+    [onImageReady]
   );
 
   const onDrop = useCallback(
